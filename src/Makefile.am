@@ -6,7 +6,7 @@ ITUNES_SRC=filescanner_itunes.c
 endif
 
 if COND_SPOTIFY
-SPOTIFY_SRC=spotify.c spotify.h
+SPOTIFY_SRC=spotify.c spotify.h inputs/spotify.c
 endif
 
 if COND_LASTFM
