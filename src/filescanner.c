@@ -61,6 +61,7 @@
 #include "player.h"
 #include "cache.h"
 #include "artwork.h"
+#include "listener.h"
 #include "commands.h"
 
 #ifdef LASTFM
@@ -108,10 +109,17 @@ static int scan_exit;
 static int inofd;
 static struct event_base *evbase_scan;
 static struct event *inoev;
+static struct event *updateev;
 static pthread_t tid_scan;
 static struct deferred_pl *playlists;
 static struct stacked_dir *dirstack;
 static struct commands_base *cmdbase;
+
+// After being told by db that the library was updated through update_trigger(),
+// wait 60 seconds before notifying listeners of LISTENER_DATABASE. This is to
+// avoid bombarding the listeners while there are many db updates, and to make
+// sure they only get a single update (useful for the cache).
+static struct timeval library_update_wait = { 60, 0 };
 
 #if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
 struct deferred_file
@@ -1241,6 +1249,8 @@ bulk_scan(int flags)
       db_hook_post_scan();
     }
 
+  listener_notify(LISTENER_DATABASE);
+
   // Set scan in progress flag to FALSE
   scanning = 0;
 }
@@ -1921,6 +1931,21 @@ inofd_event_unset(void)
 
 /* Thread: scan */
 
+static void
+update_trigger_cb(int fd, short what, void *arg)
+{
+  listener_notify(LISTENER_DATABASE);
+}
+
+static enum command_state
+update_trigger(void *arg, int *retval)
+{
+  evtimer_add(updateev, &library_update_wait);
+
+  *retval = 0;
+  return COMMAND_END;
+}
+
 static enum command_state
 filescanner_initscan(void *arg, int *retval)
 {
@@ -1951,6 +1976,16 @@ filescanner_fullrescan(void *arg, int *retval)
 
   *retval = 0;
   return COMMAND_END;
+}
+
+// TODO Move to abstraction
+void
+library_update_trigger(void)
+{
+  if (scanning)
+    return;
+
+  commands_exec_async(cmdbase, update_trigger, NULL);
 }
 
 void
@@ -2010,6 +2045,13 @@ filescanner_init(void)
       goto ino_fail;
     }
 
+  updateev = evtimer_new(evbase_scan, update_trigger_cb, NULL);
+  if (!updateev)
+    {
+      DPRINTF(E_FATAL, L_SCAN, "Could not create library update event\n");
+      goto updateev_fail;
+    }
+
   cmdbase = commands_base_new(evbase_scan, NULL);
 
   ret = pthread_create(&tid_scan, NULL, filescanner, NULL);
@@ -2030,6 +2072,7 @@ filescanner_init(void)
 
  thread_fail:
   commands_base_free(cmdbase);
+ updateev_fail:
   close(inofd);
  ino_fail:
   event_base_free(evbase_scan);

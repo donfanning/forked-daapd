@@ -40,6 +40,9 @@ scan_itunes_itml(char *file);
 #endif
 
 void
+library_update_trigger(void); // TODO Move to library abstraction
+
+void
 filescanner_trigger_initscan(void);
 
 void
